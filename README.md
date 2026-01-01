@@ -55,3 +55,6 @@ A **scenario-based stress testing engine** for equity option portfolios. Build p
 - Fetches **spot price data** for underlying equities.
 - Builds **implied volatility surfaces** for portfolio pricing.
 - Prices portfolios using **Black-Scholes-based PortfolioPricer**.
+
+---
+- Clone repo and run 'streamlit run app.py' in terminal to access dashboard.
