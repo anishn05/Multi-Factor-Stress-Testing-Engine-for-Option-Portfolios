@@ -1,114 +1,186 @@
 from market_data.spot import SpotData
 from market_data.option_chain import OptionChainLoader
-from engine.pricer import PortfolioPricer
 from market_data.vol_surface import ImpliedVolSurface
-from diagnostics.vol_surface_diagnostics import VolSurfaceDiagnostics
+from engine.pricer import PortfolioPricer
+from engine.pnl_explain import PnLExplain
+from stress.scenario_engine import ScenarioEngine
 from diagnostics.data_split import split_option_chains
-from stress.vol_stress import SurfaceStressEngine
-from stress.pnl_recalc import vol_stress_pnl
-from stress.spot_stress import SpotStressEngine
-from models.greeks import GreeksEngine
+from diagnostics.greek_diagnostics import GreekValidityDiagnostics
+from plots.plots import plot_scenario_dashboard
+import copy
 
+# =============================
+# Helper Functions
+# =============================
+
+def normalize_greeks(greeks, portfolio, portfolio_value):
+    """
+    Normalize Greeks for reporting:
+    - Total
+    - Per contract
+    - % of portfolio value
+    """
+
+    total_contracts = sum(opt.quantity * opt.contract_size for opt in portfolio)
+
+    normalized = {}
+
+    for greek in ["delta", "gamma", "vega", "theta"]:
+        normalized[f"{greek}_total"] = greeks[greek]
+        normalized[f"{greek}_per_contract"] = greeks[greek] / total_contracts
+        normalized[f"{greek}_pct_portfolio"] = greeks[greek] / portfolio_value
+
+    return normalized
+
+
+# =============================
+# Main Workflow
+# =============================
 
 def main():
 
-    rate = 0.05
+    # -----------------------------
+    # Global Parameters
+    # -----------------------------
+    underlying = "SPY"
+    rate = 0.04
 
     # -----------------------------
-    # 1. Load real spot price
+    # 1. Load Spot Price
     # -----------------------------
-    spot_loader = SpotData("AAPL")
+    spot_loader = SpotData(underlying)
     spot_loader.fetch(start_date="2023-01-01")
     spot = spot_loader.latest_spot()
-    print(f"Latest spot for AAPL: {spot}")
 
+    print(f"\nLatest spot for {underlying}: {spot:.2f}")
     # -----------------------------
-    # 2. Load real options for first expiry
+    # 2. Load Option Chains & Build Portfolio
     # -----------------------------
-    chain_loader = OptionChainLoader("AAPL")
-    expiry = chain_loader.get_expirations()[0]
+    chain_loader = OptionChainLoader(underlying)
+    expiries = chain_loader.get_expirations()
 
-    portfolio = chain_loader.build_portfolio(expiry=expiry, spot=spot, base_size=10)
-    print(f"Portfolio size: {len(portfolio)} options")
+    target_expiry = expiries[10]
+    portfolio = chain_loader.build_portfolio(
+        expiry=target_expiry,
+        spot=spot,
+        base_size=10
+    )
 
+    print(f"Portfolio contains {len(portfolio)} option positions")
     # -----------------------------
-    # 3. Build vol surface (flat for now)
+    # 3. Build Implied Volatility Surface
     # -----------------------------
-    expiries = chain_loader.get_expirations()[:15]  # first 3 maturities
-    option_chains = chain_loader.get_option_chain_for_surface(expiries)
+    surface_expiries = expiries[:15]
+    option_chains = chain_loader.get_option_chain_for_surface(surface_expiries)
+
     calibration_chains, validation_chains = split_option_chains(option_chains)
 
     surface = ImpliedVolSurface(spot)
     surface.build_from_option_chains(calibration_chains)
 
-    # Diagnostics
-    diagnostics = VolSurfaceDiagnostics(surface)
-    fit_stats = diagnostics.out_of_sample_fit(validation_chains)
-
-    print("Out-of-sample diagnostics:")
-    for k, v in fit_stats.items():
-        print(f"{k}: {v:.4f}")
-
     # -----------------------------
-    # 4. Price portfolio
+    # 4. Base Portfolio Valuation
     # -----------------------------
-    
     pricer = PortfolioPricer(rate=rate)
-    value = pricer.price(portfolio, spot, surface)
-    print(f"Portfolio value: {value}")
+    base_value = pricer.price(portfolio, spot, surface)
 
-    # Instantiate stress engine
-    stress_engine = SurfaceStressEngine(surface)
+    print(f"Base portfolio value: {base_value:,.2f}")
 
-    # Define shocks
-    shocks = [
-        {'type':'parallel','value':0.05},   # +5 vol points
-        {'type':'parallel','value':-0.05},  # -5 vol points
-        {'type':'skew','value':0.02},       # add slope
-        {'type':'curvature','value':0.03}   # add convexity
-    ]
-
-    for shock in shocks:
-        pnl = vol_stress_pnl(portfolio, surface, stress_engine, shock)
-        print(f"Shock: {shock}, PnL impact: {pnl:.2f}")
-
-    # Initialize spot stress engine
-    spot_stress = SpotStressEngine(portfolio, pricer, surface, rate)
-
-    # Apply parallel shocks: ±1%, ±5%
-    shocks = [0.01, -0.01, 0.05, -0.05]
-    spot_pnls = spot_stress.apply_parallel_shocks(shocks)
-
-    for shock_pct, pnl in spot_pnls.items():
-        print(f"Spot shock: {shock_pct*100:.1f}%, PnL impact: {pnl:.2f}")
-    
-    
-    from engine.spot_debug import spot_debug_report
-
-    spot_debug_report(
+    # -----------------------------
+    # 5. Initialize Stress & Explain Engines
+    # -----------------------------
+    scenario_engine = ScenarioEngine(
         portfolio=portfolio,
+        pricer=pricer,
         surface=surface,
-        spot=spot,
-        spot_shock_pct=-0.05,
         rate=rate
     )
 
-
-
-    """
-    greeks_engine = GreeksEngine(
-    portfolio=portfolio,
-    pricer=pricer,
-    surface=surface,
-    r=0.02
+    pnl_explainer = PnLExplain(
+        portfolio=portfolio,
+        pricer=pricer,
+        surface=surface,
+        r=rate
     )
 
-    greeks = greeks_engine.compute_all()
+    # -----------------------------
+    # 6. Define Stress Scenarios
+    # -----------------------------
+    scenarios = [
+        {
+            "name": "Mild Up + Vol Expansion",
+            "spot_shift": 0.01,
+            "vol_shocks": [{"type": "parallel", "value": 0.05}]
+        },
+        {
+            "name": "Equity Selloff + Vol Compression",
+            "spot_shift": -0.05,
+            "vol_shocks": [
+                {"type": "parallel", "value": -0.05},
+                {"type": "skew", "value": 0.02}
+            ]
+        }
+    ]
 
-    print("Portfolio Greeks:")
-    for k, v in greeks.items():
-        print(f"{k}: {v:.4f}")
-    """
+    # -----------------------------
+    # 7. Run Stress Scenarios
+    # -----------------------------
+    print("\n================ STRESS TEST RESULTS ================\n")
+
+    for idx, scenario in enumerate(scenarios, 1):
+
+        # --- Apply Scenario ---
+        stressed_value, pnl, shocked_spot, stressed_surface = (
+            scenario_engine.apply_scenario(
+                spot_shift=scenario["spot_shift"],
+                vol_shocks=scenario["vol_shocks"]
+            )
+        )
+
+        # --- PnL Explain ---
+        pnl_breakdown = pnl_explainer.explain(
+            shocked_spot=shocked_spot,
+            vol_shocks=scenario["vol_shocks"]
+        )
+
+        # --- Greek Validity Diagnostics ---
+        validator = GreekValidityDiagnostics(
+            base_spot=surface.spot,
+            shocked_spot=shocked_spot,
+            base_value=base_value,
+            pnl_breakdown=pnl_breakdown,
+            portfolio=portfolio
+        )
+        diagnostics = validator.run()
+
+        # =============================
+        # 8. Reporting Output (Firm-Grade)
+        # =============================
+
+        print(f"Scenario {idx}: {scenario['name']}")
+        print("--------------------------------------------------")
+        print(f"Spot shock:        {scenario['spot_shift']*100:+.1f}%")
+        print(f"Vol shocks:        {scenario['vol_shocks']}")
+        print(f"Base value:        {base_value:,.2f}")
+        print(f"Stressed value:    {stressed_value:,.2f}")
+        print(f"PnL impact:        {pnl:,.2f}")
+        print("\nPnL Attribution:")
+        for k, v in pnl_breakdown.items():
+            print(f"  {k:<12}: {v:,.2f}")
+
+        print("\nModel Validity Diagnostics:")
+        for k, v in diagnostics.items():
+            print(f"  {k:<25}: {v}")
+        
+        plot_scenario_dashboard(
+        scenario_name=f"Scenario {idx}",
+        base_spot=surface.spot,
+        shocked_spot=shocked_spot,
+        true_pnl=pnl,
+        pnl_breakdown=pnl_breakdown
+    )
+
+        print("==================================================\n")
 
 if __name__ == "__main__":
     main()

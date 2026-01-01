@@ -1,3 +1,5 @@
+#Prints the debug per option pnl breakdown under spot shock
+
 from models.black_scholes import bs_price
 import pandas as pd
 import numpy as np
@@ -36,7 +38,7 @@ def spot_debug_report(
             shocked_spot, K, T, rate, sigma_shocked, opt_type
         )
 
-        pnl = (price_shocked - price_base) * qty
+        pnl = (price_shocked - price_base) * qty * opt.contract_size
 
         # Intrinsic values for sanity check
         if opt_type == "call":

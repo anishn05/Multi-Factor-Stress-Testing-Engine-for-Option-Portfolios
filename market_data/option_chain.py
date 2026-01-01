@@ -36,19 +36,33 @@ class OptionChainLoader:
             chains[expiry] = df[["strike", "impliedVolatility"]]
         return chains
 
-    def build_portfolio(self, expiry: str, spot: float, base_size: int = 10) -> OptionPortfolio:
-        """
-        Builds a equity options trading portfolio:
-        ATM straddle + OTM wings
-        """
+    """
+    def build_portfolio1(
+        self,
+        expiry: str,
+        spot: float,
+        base_size: int = 10,
+        custom_strikes: list = None,
+        custom_quantities: list = None,
+        option_types: list = None
+    ) -> OptionPortfolio:
 
+        portfolio = OptionPortfolio()
         chain = self.ticker_obj.option_chain(expiry)
         calls = chain.calls
         puts = chain.puts
-
         strikes = sorted(calls["strike"].values)
         maturity = self._time_to_maturity(expiry)
 
+        # If user provided custom portfolio inputs, use them
+        if custom_strikes and custom_quantities and option_types:
+            for s, q, t in zip(custom_strikes, custom_quantities, option_types):
+                portfolio.add(EuropeanOption(strike=s, maturity=maturity, option_type=t, quantity=q))
+            return portfolio
+
+        # ----------------------------
+        # Default preset portfolio
+        # ----------------------------
         atm_strike = self._closest_strike(strikes, spot)
 
         strikes_map = {
@@ -59,18 +73,43 @@ class OptionChainLoader:
             "-10%": self._closest_strike(strikes, spot * 0.90),
         }
 
-        portfolio = OptionPortfolio()
-
         # ATM Straddle
-        portfolio.add(EuropeanOption(strikes_map["ATM"], maturity, "call", base_size))
-        #portfolio.add(EuropeanOption(strikes_map["ATM"], maturity, "put", base_size))
+        #portfolio.add(EuropeanOption(strikes_map["ATM"], maturity, "Call", base_size))
+        #portfolio.add(EuropeanOption(strikes_map["ATM"], maturity, "Put", base_size))
 
-        # Long wings
+        # Long wings (optional, commented for now)
         #portfolio.add(EuropeanOption(strikes_map["+5%"], maturity, "call", base_size // 2))
         #portfolio.add(EuropeanOption(strikes_map["-5%"], maturity, "put", base_size // 2))
 
-        # Short far wings (risk-financing)
+        # Short far wings (optional, commented for now)
         #portfolio.add(EuropeanOption(strikes_map["+10%"], maturity, "call", -base_size // 5))
         #portfolio.add(EuropeanOption(strikes_map["-10%"], maturity, "put", -base_size // 5))
 
         return portfolio
+    """
+
+    def build_portfolio(self, expiry: str, spot: float, base_size: int = 10, maturity: float = None) -> OptionPortfolio:
+        """
+        Builds a portfolio. If maturity is passed, uses it for all options.
+        """
+        chain = self.ticker_obj.option_chain(expiry)
+        calls = chain.calls
+        strikes = sorted(calls["strike"].values)
+
+        # Compute maturity from expiry only if not passed
+        if maturity is None:
+            maturity = self._time_to_maturity(expiry)
+
+        atm_strike = self._closest_strike(strikes, spot)
+
+        strikes_map = {
+            "ATM": atm_strike,
+            "+5%": self._closest_strike(strikes, spot * 1.05),
+            "-5%": self._closest_strike(strikes, spot * 0.95),
+        }
+
+        portfolio = OptionPortfolio()
+        # ATM Straddle
+        portfolio.add(EuropeanOption(strikes_map["ATM"], maturity, "call", base_size))
+        return portfolio
+

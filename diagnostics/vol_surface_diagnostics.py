@@ -1,5 +1,4 @@
-# diagnostics/vol_surface_diagnostics.py
-
+# Runs vol surface diagnostics to test validatity
 import numpy as np
 
 class VolSurfaceDiagnostics:

@@ -1,3 +1,5 @@
+#Function to split option chains into calibration and validation to test vol surface adn run diagnostics
+
 def split_option_chains(option_chains, holdout_frac=0.25, seed=42):
     calibration = {}
     validation = {}

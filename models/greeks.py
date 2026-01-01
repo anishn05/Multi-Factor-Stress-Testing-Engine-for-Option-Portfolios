@@ -1,5 +1,6 @@
 import copy
 import numpy as np
+from engine.pricer import PortfolioPricer
 
 class GreeksEngine:
     """
@@ -52,10 +53,13 @@ class GreeksEngine:
         Parallel vol surface bump (absolute vol).
         vol_bump = 0.01 = +1 vol point
         """
-        bumped_surface = copy.deepcopy(self.surface)
-        bumped_surface.bump_parallel(vol_bump)
+        bumped_surface = self.surface.bump_parallel(vol_bump)
 
-        v_up = self.pricer.price(self.portfolio, self.base_spot, bumped_surface)
+        v_up = self.pricer.price(
+            self.portfolio,
+            self.base_spot,
+            bumped_surface
+        )
 
         vega = (v_up - self.base_value) / vol_bump
         return vega
@@ -64,16 +68,21 @@ class GreeksEngine:
 
     def theta(self, dt=1/252):
         """
-        One-day time decay.
-        dt in years (1/252 ≈ one trading day)
+        Compute one-day theta (time decay) using rolled-down maturities.
         """
-        decayed_surface = copy.deepcopy(self.surface)
-        decayed_surface.roll_down(dt)
+        # Base portfolio value is already computed as self.base_value
+        rolled_value = PortfolioPricer.price_with_rolled_maturity(
+            pricer=self.pricer,
+            portfolio=self.portfolio,
+            spot=self.base_spot,
+            vol_surface=self.surface,
+            dt=dt
+        )
 
-        v_new = self.pricer.price(self.portfolio, self.base_spot, decayed_surface)
-
-        theta = v_new - self.base_value
+        # Theta = PnL for one day decay
+        theta = rolled_value - self.base_value
         return theta
+
 
     # ---------- SUMMARY ---------- #
 

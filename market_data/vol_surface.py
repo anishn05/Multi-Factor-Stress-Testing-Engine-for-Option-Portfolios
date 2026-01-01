@@ -1,6 +1,27 @@
 import numpy as np
 from scipy.interpolate import interp1d
 from datetime import datetime
+import copy
+
+class Smile:
+    """
+    Thin wrapper around interp1d that stores
+    the data needed for bumps and roll-down.
+    """
+    def __init__(self, x, y, kind="cubic"):
+        self.x = np.asarray(x)
+        self.y = np.asarray(y)
+        self.kind = kind
+
+        self.fn = interp1d(
+            self.x,
+            self.y,
+            kind=kind,
+            fill_value="extrapolate"
+        )
+
+    def __call__(self, z):
+        return self.fn(z)
 
 
 class ImpliedVolSurface:
@@ -45,6 +66,8 @@ class ImpliedVolSurface:
             vols = vols[order]
 
             # Linear interpolation in log-moneyness
+
+            """
             interp = interp1d(
                 log_moneyness,
                 vols,
@@ -52,8 +75,14 @@ class ImpliedVolSurface:
                 fill_value="extrapolate",
                 bounds_error=False
             )
-
             self.surface[maturity] = interp
+            """
+            self.surface[maturity] = Smile(
+            log_moneyness,
+            vols,
+            kind="linear"
+            )
+            
 
     def get_vol(self, strike: float, maturity: float) -> float:
         """
@@ -86,3 +115,28 @@ class ImpliedVolSurface:
         # Linear interpolation in time
         w = (maturity - t1) / (t2 - t1)
         return float((1 - w) * vol1 + w * vol2)
+
+    
+    def bump_parallel(self, bump: float):
+        """
+        Parallel volatility bump (additive).
+        Returns a NEW ImpliedVolSurface.
+        """
+        bumped = copy.deepcopy(self)
+
+        for T, f_interp in bumped.surface.items():
+            x = f_interp.x                    # log-moneyness grid
+            vols = f_interp(x)                # original vols
+            vols_bumped = np.maximum(vols + bump, 1e-4)
+
+            bumped.surface[T] = interp1d(
+                x,
+                vols_bumped,
+                kind="linear",
+                fill_value="extrapolate",
+                bounds_error=False
+            )
+
+        return bumped
+
+
