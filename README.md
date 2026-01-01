@@ -7,8 +7,8 @@ A **scenario-based stress testing engine** for equity option portfolios. Build p
 ## 📸 Screenshots
 
 ### Dashboard Overview
-(EquitySellOff_1.png)
-(EquitySellOff_2.png)
+(images/EquitySellOff_1.png)
+(images/EquitySellOff_2.png)
 
 ## Features
 
